@@ -169,7 +169,8 @@ class _FakeWebSocket:
         self.closed = True
 
 
-def test_ws_fallback_fails_closed(_routed_env: None) -> None:
+@pytest.mark.parametrize("wrapped", [False, True])
+def test_ws_fallback_fails_closed(_routed_env: None, wrapped: bool) -> None:
     from headroom.proxy.server import HeadroomProxy
 
     proxy = HeadroomProxy(_config())
@@ -177,12 +178,13 @@ def test_ws_fallback_fails_closed(_routed_env: None) -> None:
     body = {"model": "glm-4.6", "input": "hi"}
     first_msg_raw = json.dumps({"type": "response.create", "response": body})
 
+    ws_body = {"type": "response.create", "response": body} if wrapped else body
     guard = _SendGuard()
     with patch.object(httpx.AsyncClient, "send", guard):
-        asyncio.run(
+        usage = asyncio.run(
             proxy._ws_http_fallback(
                 ws,
-                body,
+                ws_body,
                 first_msg_raw,
                 {"authorization": "Bearer inbound"},
                 "req_failclosed",
@@ -195,3 +197,77 @@ def test_ws_fallback_fails_closed(_routed_env: None) -> None:
     assert event["type"] == "error"
     assert event["error"]["type"] == "server_error"
     assert guard.calls == []
+    assert usage == (0, 0, 0, 0, 0)
+
+
+@pytest.mark.parametrize(
+    ("path", "payload", "expected_path"),
+    [
+        (
+            "/v1/chat/completions",
+            {"model": "glm-4.6", "messages": [{"role": "user", "content": "hi"}]},
+            "/v1/chat/completions",
+        ),
+        ("/v1/responses", {"model": "glm-4.6", "input": "hi"}, "/v1/responses"),
+        (
+            "/v1/messages",
+            {"model": "glm-4.6", "max_tokens": 10, "messages": [{"role": "user", "content": "hi"}]},
+            "/v1/messages",
+        ),
+    ],
+)
+@pytest.mark.parametrize("routed", [True, False])
+def test_route_forwarding_keeps_url_auth_and_extra_header_scope_together(
+    _routed_env: None,
+    monkeypatch: pytest.MonkeyPatch,
+    path: str,
+    payload: dict[str, Any],
+    expected_path: str,
+    routed: bool,
+) -> None:
+    from fastapi.testclient import TestClient
+
+    from headroom.proxy.server import create_app
+
+    monkeypatch.setenv("FAILCLOSED_TEST_KEY", "route-secret")
+    payload = dict(payload, model="glm-4.6" if routed else "unmatched-model")
+    config = _config()
+    config.openai_extra_headers = {"X-Operator-Secret": "openai-secret"}
+    config.anthropic_extra_headers = {"X-Operator-Secret": "anthropic-secret"}
+    sent: list[httpx.Request] = []
+
+    async def capture_send(client: Any, request: httpx.Request, **kwargs: Any) -> httpx.Response:
+        sent.append(request)
+        return httpx.Response(
+            200,
+            request=request,
+            json={
+                "id": "test",
+                "model": "glm-4.6",
+                "content": [],
+                "choices": [],
+                "output": [],
+                "usage": {"input_tokens": 1, "output_tokens": 0},
+            },
+        )
+
+    with TestClient(create_app(config), raise_server_exceptions=False) as client:
+        with patch.object(httpx.AsyncClient, "send", capture_send):
+            response = client.post(
+                path,
+                json=payload,
+                headers={"Authorization": "Bearer inbound-secret", "x-api-key": "inbound-api-key"},
+            )
+    assert response.status_code == 200, response.text
+    assert len(sent) == 1
+    if routed:
+        assert str(sent[0].url) == "https://ollama.test" + expected_path
+        assert sent[0].headers["authorization"] == "Bearer route-secret"
+        assert "x-api-key" not in sent[0].headers
+        assert "x-operator-secret" not in sent[0].headers
+    else:
+        provider = "anthropic" if path == "/v1/messages" else "openai"
+        assert str(sent[0].url) == f"https://api.{provider}.test" + expected_path
+        assert sent[0].headers["authorization"] == "Bearer inbound-secret"
+        assert sent[0].headers["x-api-key"] == "inbound-api-key"
+        assert sent[0].headers["x-operator-secret"] == provider + "-secret"
