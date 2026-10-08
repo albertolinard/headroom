@@ -152,9 +152,11 @@ def parse_upstream_routes(env: Mapping[str, str]) -> tuple[UpstreamRoute, ...]:
                 or not parsed_upstream.netloc
                 or parsed_upstream.username is not None
                 or parsed_upstream.password is not None
+                or parsed_upstream.query
+                or parsed_upstream.fragment
             ):
                 raise UpstreamRoutesConfigError(
-                    f"HEADROOM_UPSTREAM_ROUTES[{idx}].upstream must be an HTTP(S) URL without embedded credentials"
+                    f"HEADROOM_UPSTREAM_ROUTES[{idx}].upstream must be an HTTP(S) base URL without embedded credentials, query, or fragment"
                 )
         auth_spec = entry.get("auth", "passthrough")
         if not isinstance(auth_spec, str):

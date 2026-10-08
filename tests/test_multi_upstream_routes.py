@@ -107,7 +107,14 @@ def test_parse_bad_auth_fails_closed() -> None:
 
 @pytest.mark.parametrize(
     "upstream",
-    ["file:///tmp/socket", "https://user:secret@example.com", "example.com", 123],
+    [
+        "file:///tmp/socket",
+        "https://user:secret@example.com",
+        "example.com",
+        123,
+        "https://gateway.example/api?tenant=x",
+        "https://gateway.example/api#fragment",
+    ],
 )
 def test_parse_unsafe_or_invalid_upstream_fails_closed(upstream: object) -> None:
     with pytest.raises(UpstreamRoutesConfigError, match="upstream"):
@@ -196,6 +203,32 @@ def test_resolve_route_without_upstream_uses_protocol_slot() -> None:
     )
     res = rt.resolve_upstream(protocol="anthropic", model="claude-opus-4-8", headers={})
     assert res.base_url == "https://my-anthropic.example"
+
+
+@pytest.mark.parametrize("handler_protocol", ["openai", "anthropic"])
+@pytest.mark.parametrize("model_prefix", ["claude-", "*"])
+def test_omitted_protocol_uses_documented_openai_default(
+    handler_protocol: str, model_prefix: str
+) -> None:
+    rt = _runtime(routes=_routes({"model_prefix": model_prefix}))
+    result = rt.resolve_upstream(protocol=handler_protocol, model="claude-sonnet", headers={})
+    assert result.base_url == "https://api.openai.com"
+
+
+@pytest.mark.parametrize("handler_protocol", ["openai", "anthropic"])
+def test_explicit_protocol_selects_target_independently_of_handler(handler_protocol: str) -> None:
+    rt = _runtime(routes=_routes({"model_prefix": "*", "protocol": "anthropic"}))
+    result = rt.resolve_upstream(protocol=handler_protocol, model="claude-sonnet", headers={})
+    assert result.base_url == "https://api.anthropic.com"
+
+
+def test_operator_can_configure_http_gateway_transport() -> None:
+    routes = _routes(
+        {"model_prefix": "glm-", "upstream": "http://gateway.internal:8080", "auth": "env:KEY"}
+    )
+    result = _runtime(routes=routes).resolve_upstream(protocol="openai", model="glm-5", headers={})
+    assert result.base_url == "http://gateway.internal:8080"
+    assert isinstance(result.auth, BearerAuth)
 
 
 def test_resolve_case_insensitive_model() -> None:

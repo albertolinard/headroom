@@ -1413,7 +1413,7 @@ class AnthropicHandlerMixin:
                 # One identity rule for every provider: peer-owned, and
                 # credential-scoped only for proxy-token / direct loopback
                 # callers (headroom/proxy/rate_limit_identity.py).
-                rate_key = rate_limit_identity(request, headers)
+                rate_key = rate_limit_identity(request)
                 allowed, wait_seconds = await self.rate_limiter.check_request(rate_key)
                 if not allowed:
                     await self.metrics.record_rate_limited(

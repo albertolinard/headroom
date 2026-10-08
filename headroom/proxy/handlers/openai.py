@@ -3896,7 +3896,7 @@ class OpenAIHandlerMixin:
 
         # Rate limiting
         if self.rate_limiter:
-            rate_key = rate_limit_identity(request, headers)
+            rate_key = rate_limit_identity(request)
             allowed, wait_seconds = await self.rate_limiter.check_request(rate_key)
             if not allowed:
                 await self.metrics.record_rate_limited(
@@ -6146,6 +6146,9 @@ class OpenAIHandlerMixin:
 
         _pre_strip_count_resp = sum(1 for k in headers if k.lower().startswith("x-headroom-"))
         headers = _strip_internal_headers(headers)
+        # Classify subscription routing before an env-auth route can replace
+        # the inbound OAuth bearer containing the ChatGPT account claim.
+        headers, is_chatgpt_auth = _resolve_codex_routing_headers(headers)
         # Client header and resolved candidate are different values. CCR and
         # the secret-header gate see only x-headroom-base-url (None when the
         # client did not set one). Routing uses the resolved candidate:
@@ -6159,7 +6162,7 @@ class OpenAIHandlerMixin:
         openai_upstream_base_url = self._resolve_openai_upstream(request)
         if (
             custom_upstream_base_url is None
-            and not has_chatgpt_account_header(headers)
+            and not is_chatgpt_auth
             and getattr(self, "provider_runtime", None) is not None
             and self.provider_runtime.match_upstream_route(model) is not None
         ):
@@ -6202,7 +6205,6 @@ class OpenAIHandlerMixin:
             stripped_count=_pre_strip_count_resp,
             request_id=request_id,
         )
-        headers, is_chatgpt_auth = _resolve_codex_routing_headers(headers)
         if is_chatgpt_auth:
             client = "codex"
         codex_project = None
@@ -6328,7 +6330,7 @@ class OpenAIHandlerMixin:
 
         # Rate limiting
         if self.rate_limiter:
-            rate_key = rate_limit_identity(request, headers)
+            rate_key = rate_limit_identity(request)
             allowed, wait_seconds = await self.rate_limiter.check_request(rate_key)
             if not allowed:
                 await self.metrics.record_rate_limited(provider="openai", source="headroom")

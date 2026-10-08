@@ -1643,7 +1643,14 @@ class HeadroomProxy(
         if isinstance(resolution.auth, BearerAuth):
             token = os.environ.get(resolution.auth.env_var, "") or ""
             for h in list(outbound):
-                if h.lower() in ("authorization", "x-api-key", "api-key"):
+                if h.lower() in (
+                    "authorization",
+                    "x-api-key",
+                    "api-key",
+                    "cookie",
+                    "proxy-authorization",
+                    "x-goog-api-key",
+                ):
                     del outbound[h]
             if not token:
                 self._route_logger.error(
